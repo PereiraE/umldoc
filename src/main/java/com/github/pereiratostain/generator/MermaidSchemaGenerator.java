@@ -4,15 +4,11 @@ import static java.util.Objects.requireNonNull;
 
 import com.github.forax.umldoc.core.AssociationDependency;
 import com.github.forax.umldoc.core.Entity;
-import com.github.forax.umldoc.core.Field;
 import com.github.forax.umldoc.core.Modifier;
 import java.io.IOException;
 import java.io.Writer;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -31,7 +27,7 @@ public class MermaidSchemaGenerator implements Generator {
       generateEntity(writer, entity);
     }
     for (var association: associations) {
-      generateAssociation(association);
+      generateAssociation(writer, association);
     }
   }
 
@@ -60,7 +56,7 @@ public class MermaidSchemaGenerator implements Generator {
             .collect(Collectors.joining("\n"));
   }
 
-  private String generateAssociation(AssociationDependency association) {
+  private void generateAssociation(Writer writer, AssociationDependency association) throws IOException {
     var leftSide = association.left();
     var rightSide = association.right();
     var leftClass = leftSide.entity().name();
@@ -69,7 +65,7 @@ public class MermaidSchemaGenerator implements Generator {
     var rightCardinality = rightSide.cardinality().name();
     var arrow = generateArrow(leftSide, rightSide);
     var label = getAssociationLabel(leftSide, rightSide);
-    return """
+    writer.append( """
             %s %s %s %s %s %s
           """
           .formatted(leftClass,
@@ -77,7 +73,7 @@ public class MermaidSchemaGenerator implements Generator {
                   arrow,
                   rightCardinality,
                   rightClass,
-                  label);
+                  label));
   }
 
   private String generateArrow(AssociationDependency.Side leftSide, AssociationDependency.Side rightSide) {
@@ -98,50 +94,12 @@ public class MermaidSchemaGenerator implements Generator {
     if (leftLabel.isPresent() && rightLabel.isPresent()) {
       throw new IllegalStateException("Only one side of the association can hold the label");
     }
-    return leftLabel.orElse(rightLabel.get());
-  }
-
-  private String computeFieldsEnum(Entity entity) {
-    var fields = new ArrayList<Field>();
-
-    for (var field : entity.fields()) {
-      fields.add(field);
-    }
-    return generateRecordFields(fields);
-  }
-
-  private String computeFieldsClass(Entity entity, ArrayList<String> associations,
-                                    Set<String> entitiesName) {
-    var fields = new ArrayList<Field>();
-    Pattern pattern = Pattern.compile("<.*>");
-
-    for (var field : entity.fields()) {
-      var fieldType = field.type();
-      fieldType = fieldType.replace(";", "");
-
-      Matcher matcher = pattern.matcher(fieldType);
-
-      if (matcher.find()) {
-        var string = matcher.group(0);
-        string = string.replace("<", "");
-        string = string.replace(">", "");
-        fieldType = string;
+    return leftLabel.orElseGet(() -> {
+      if (rightLabel.isEmpty()) {
+        throw new AssertionError();
       }
-
-      if (entitiesName.contains(fieldType)) {
-        associations.add(fieldType);
-      } else {
-        fields.add(field);
-      }
-    }
-
-    return generateFields(fields);
-  }
-
-  private String generateRecordFields(List<Field> fields) {
-    return fields.stream()
-            .map(field -> "\t" + field.name())
-            .collect(Collectors.joining("\n"));
+      return rightLabel.get();
+    });
   }
 
   private static String applyModifiersToName(Set<Modifier> modifiers, String name) {
