@@ -2,13 +2,13 @@ package com.github.pereiratostain.generator;
 
 import static java.util.Objects.requireNonNull;
 
+import com.github.forax.umldoc.core.AssociationDependency;
 import com.github.forax.umldoc.core.Entity;
 import com.github.forax.umldoc.core.Field;
 import com.github.forax.umldoc.core.Modifier;
 import java.io.IOException;
 import java.io.Writer;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
@@ -21,15 +21,17 @@ import java.util.stream.Collectors;
 public class MermaidSchemaGenerator implements Generator {
 
   @Override
-  public void generate(Writer writer, List<Entity> entities) throws IOException {
+  public void generate(Writer writer, List<Entity> entities, List<AssociationDependency> associations) throws IOException {
     requireNonNull(writer);
     requireNonNull(entities);
-
-    var entitiesName = entities.stream().map(Entity::name).collect(Collectors.toSet());
+    requireNonNull(associations);
 
     generateHeader(writer);
-    for (var entity : entities) {
-      generateEntity(writer, entity, entitiesName);
+    for (var entity: entities) {
+      generateEntity(writer, entity);
+    }
+    for (var association: associations) {
+      generateAssociation(association);
     }
   }
 
@@ -41,25 +43,62 @@ public class MermaidSchemaGenerator implements Generator {
             """);
   }
 
-  private void generateEntity(Writer writer, Entity entity,
-                              Set<String> entitiesName) throws IOException {
-    var associations = new ArrayList<String>();
-    var stereotype = "";
-    String fields;
+  private void generateEntity(Writer writer, Entity entity) throws IOException {
+    var fields = generateFieldsOfEntity(entity);
+    writer.append("""
+                class %s {
+                  %s
+                  %s
+                }
+            """
+            .formatted(entity.name(), entity.stereotype(), fields));
+  }
 
-    if (entity.stereotype() == Entity.Stereotype.ENUM) {
-      fields = computeFieldsEnum(entity);
-      stereotype = "\t<<enumeration>>\n";
-    } else {
-      fields = computeFieldsClass(entity, associations, entitiesName);
+  private String generateFieldsOfEntity(Entity entity) {
+    return entity.fields().stream()
+            .map(field -> applyModifiersToName(field.modifiers(), field.name()))
+            .collect(Collectors.joining("\n"));
+  }
+
+  private String generateAssociation(AssociationDependency association) {
+    var leftSide = association.left();
+    var rightSide = association.right();
+    var leftClass = leftSide.entity().name();
+    var rightClass = rightSide.entity().name();
+    var leftCardinality = leftSide.cardinality().name();
+    var rightCardinality = rightSide.cardinality().name();
+    var arrow = generateArrow(leftSide, rightSide);
+    var label = getAssociationLabel(leftSide, rightSide);
+    return """
+            %s %s %s %s %s %s
+          """
+          .formatted(leftClass,
+                  leftCardinality,
+                  arrow,
+                  rightCardinality,
+                  rightClass,
+                  label);
+  }
+
+  private String generateArrow(AssociationDependency.Side leftSide, AssociationDependency.Side rightSide) {
+    String arrow = "";
+    if (leftSide.navigability()) {
+      arrow += "<";
     }
+    arrow += "--";
+    if (rightSide.navigability()) {
+      arrow += ">";
+    }
+    return arrow;
+  }
 
-    writer.append("    class "
-            + entity.name()
-            + " {\n" + stereotype
-            + fields + "\n    }\n"
-            + generateAssociations(entity, associations)
-            + "\n\n");
+  private String getAssociationLabel(AssociationDependency.Side leftSide, AssociationDependency.Side rightSide) {
+    var leftLabel = leftSide.label();
+    var rightLabel = rightSide.label();
+    if (leftLabel.isPresent() && rightLabel.isPresent()) {
+      throw new IllegalStateException("Only one side of the association can hold the label");
+    }
+    return leftLabel.orElse(rightLabel.get());
   }
 
   private String computeFieldsEnum(Entity entity) {
@@ -99,35 +138,25 @@ public class MermaidSchemaGenerator implements Generator {
     return generateFields(fields);
   }
 
-  private String generateFields(List<Field> fields) {
-    return fields.stream()
-            .map(field -> "\t"
-                    + modifierToString(field.modifiers().iterator().next())
-                    + field.name()
-                    + " : "
-                    + field.type().replace(";", ""))
-            .collect(Collectors.joining("\n"));
-  }
-
   private String generateRecordFields(List<Field> fields) {
     return fields.stream()
             .map(field -> "\t" + field.name())
             .collect(Collectors.joining("\n"));
   }
 
-  private String generateAssociations(Entity entity, List<String> associations) {
-    return associations.stream()
-            .map(field -> "\t" + entity.name() + "-->" + field)
-            .collect(Collectors.joining("\n"));
-  }
-
-  private static String modifierToString(Modifier modifier) {
-    return switch (modifier) {
-      case PUBLIC -> "+";
-      case PRIVATE -> "-";
-      case PROTECTED -> "#";
-      case PACKAGE -> "~";
-      default -> throw new IllegalArgumentException("This modifier can't be convert to a String");
-    };
+  private static String applyModifiersToName(Set<Modifier> modifiers, String name) {
+    String prefix = "";
+    String suffix = "";
+    for (var modifier : modifiers) {
+      switch (modifier) {
+        case PUBLIC -> prefix = "+";
+        case PRIVATE -> prefix = "-";
+        case PROTECTED -> prefix = "#";
+        case PACKAGE -> prefix = "~";
+        case STATIC -> suffix = "$";
+        case FINAL -> suffix = "*";
+      }
+    }
+    return prefix + name + suffix;
   }
 }
